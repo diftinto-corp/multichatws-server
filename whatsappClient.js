@@ -1,6 +1,8 @@
 // whatsappClient.js
-const { Boom } = require("@hapi/boom");
-const makeWASocket = require("@whiskeysockets/baileys").default;
+// Importamos las librerías necesarias para el funcionamiento del cliente de WhatsApp
+const { Boom } = require("@hapi/boom"); // Para manejar errores específicos
+const makeWASocket = require("@whiskeysockets/baileys").default; // Cliente de WhatsApp
+// Importamos varias utilidades de Baileys para manejar el estado de autenticación, la versión de WhatsApp, y más
 const {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
@@ -9,108 +11,109 @@ const {
   proto,
   makeInMemoryStore,
 } = require("@whiskeysockets/baileys");
-const P = require("pino");
-const generateAIResponse = require("./openai");
+const P = require("pino"); // Librería de logging
+const generateAIResponse = require("./openai"); // Función para generar respuestas automáticas
 
-// Configuración del logger
+// Configuramos el logger para registrar eventos y errores
 const logger = P(
   { timestamp: () => `,"time":"${new Date().toJSON()}"` },
   P.destination("./wa-logs.txt")
 );
-logger.level = "trace";
+logger.level = "trace"; // Establecemos el nivel de detalle de los logs
 
+// Definimos la clase WhatsAppClient para manejar la conexión y la lógica del bot
 class WhatsAppClient {
   constructor(io) {
-    this.io = io;
-    this.sock = null;
-    this.activeConversations = {};
-    this.store = makeInMemoryStore({});
+    this.io = io; // Socket.io para comunicación en tiempo real con el frontend
+    this.sock = null; // Inicializamos el socket de WhatsApp como nulo
+    this.activeConversations = {}; // Objeto para almacenar las conversaciones activas
+    this.store = makeInMemoryStore({}); // Almacenamiento en memoria para mensajes y sesiones
   }
 
-  // Agregar la función de formateo como método de la clase
+  // Método para formatear números de teléfono al formato requerido por WhatsApp
   formatWhatsAppNumber(number) {
-    // Eliminar cualquier caracter que no sea número
-    const cleaned = number.replace(/\D/g, "");
-    // Asegurarse de que tenga el formato correcto para WhatsApp
-    return `${cleaned}@s.whatsapp.net`;
+    const cleaned = number.replace(/\D/g, ""); // Eliminamos caracteres no numéricos
+    return `${cleaned}@s.whatsapp.net`; // Añadimos el dominio de WhatsApp
   }
 
-  // Método para iniciar el cliente de WhatsApp
+  // Método para iniciar la conexión con el servidor de WhatsApp
   async start() {
     const { state, saveCreds } = await useMultiFileAuthState(
       "baileys_auth_info"
-    );
-    const { version, isLatest } = await fetchLatestBaileysVersion();
+    ); // Cargamos o inicializamos el estado de autenticación
+    const { version, isLatest } = await fetchLatestBaileysVersion(); // Obtenemos la última versión de WhatsApp
     console.log(`Using WA version ${version.join(".")}, isLatest: ${isLatest}`);
 
+    // Creamos el socket de WhatsApp con la configuración necesaria
     this.sock = makeWASocket({
       version,
       logger,
-      printQRInTerminal: true,
+      printQRInTerminal: true, // Imprime el QR en la terminal para la autenticación
       auth: {
-        creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, logger),
+        creds: state.creds, // Credenciales de autenticación
+        keys: makeCacheableSignalKeyStore(state.keys, logger), // Almacenamiento de claves
       },
-      generateHighQualityLinkPreview: true,
-      // Agregar estas configuraciones
+      generateHighQualityLinkPreview: true, // Genera vistas previas de enlaces de alta calidad
+      // Configuraciones adicionales para la conexión
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 60000,
       keepAliveIntervalMs: 25000,
       retryRequestDelayMs: 5000,
     });
 
-    // Procesar los eventos de WhatsApp
+    // Procesamos los eventos emitidos por el socket de WhatsApp
     this.sock.ev.process(async (events) => {
       if (events["messages.upsert"]) {
-        await this.handleNewMessages(events["messages.upsert"]);
+        await this.handleNewMessages(events["messages.upsert"]); // Manejamos nuevos mensajes
       }
 
       if (events["connection.update"]) {
-        await this.handleConnectionUpdate(events["connection.update"]);
+        await this.handleConnectionUpdate(events["connection.update"]); // Manejamos actualizaciones de conexión
       }
 
       if (events["creds.update"]) {
-        await saveCreds();
+        await saveCreds(); // Guardamos las credenciales actualizadas
       }
     });
   }
 
-  // Método para manejar nuevos mensajes
+  // Método para manejar la recepción de nuevos mensajes
   async handleNewMessages(upsert) {
     if (upsert.type === "notify") {
       for (const msg of upsert.messages) {
-        const conversationId = msg.key.remoteJid;
-        console.log("Message details:", JSON.stringify(msg, null, 2));
+        const conversationId = msg.key.remoteJid; // ID de la conversación
+        console.log("Message details:", JSON.stringify(msg, null, 2)); // Detalles del mensaje
 
+        // Procesamos el mensaje si es de texto
         if (msg.message?.extendedTextMessage || msg.message?.conversation) {
           const text =
-            msg.message?.extendedTextMessage?.text || msg.message?.conversation;
+            msg.message?.extendedTextMessage?.text || msg.message?.conversation; // Extraemos el texto del mensaje
           console.log(`Received message from ${conversationId}: "${text}"`);
 
-          await this.processMessage(conversationId, text);
+          await this.processMessage(conversationId, text); // Procesamos el mensaje recibido
         }
       }
     }
   }
 
-  // Método para procesar mensajes
+  // Método para procesar mensajes recibidos
   async processMessage(conversationId, text) {
-    const formattedNumber = this.formatWhatsAppNumber(conversationId);
-    const agentId = this.activeConversations[formattedNumber];
+    const formattedNumber = this.formatWhatsAppNumber(conversationId); // Formateamos el número
+    const agentId = this.activeConversations[formattedNumber]; // Obtenemos el ID del agente asignado a la conversación
     console.log(
       `Procesando mensaje para ${formattedNumber}, agentId: ${agentId}`
     );
 
     if (agentId) {
+      // Si hay un agente asignado, reenviamos el mensaje al agente
       console.log(`Reenviando mensaje al agente ${agentId}`);
-
-      // Modificar la estructura del mensaje enviado al agente
       this.io.to(agentId).emit("user_message", {
         conversationId: formattedNumber,
-        message: text, // Enviar solo el texto del mensaje
+        message: text, // Enviamos solo el texto del mensaje
       });
 
       try {
+        // Marcamos el mensaje como leído y actualizamos el estado de presencia
         await this.sock.readMessages([
           {
             remoteJid: formattedNumber,
@@ -125,15 +128,16 @@ class WhatsAppClient {
         console.error("Error al procesar mensaje:", error);
       }
     } else {
+      // Si no hay agente asignado, procesamos el mensaje automáticamente o solicitamos un agente humano
       if (text.toLowerCase().includes("humano")) {
         console.log("Usuario solicitó un agente humano");
         this.io.emit("new_conversation", { conversationId: formattedNumber });
       } else {
         console.log("No hay agente activo, procesando con IA");
         try {
-          const aiResponse = await generateAIResponse(text);
+          const aiResponse = await generateAIResponse(text); // Generamos una respuesta automática
           console.log(`Respuesta IA: "${aiResponse}"`);
-          await this.sendMessage(formattedNumber, aiResponse);
+          await this.sendMessage(formattedNumber, aiResponse); // Enviamos la respuesta
         } catch (error) {
           console.error("Error al procesar respuesta IA:", error);
         }
@@ -141,11 +145,12 @@ class WhatsAppClient {
     }
   }
 
-  // Método para manejar actualizaciones de conexión
+  // Método para manejar actualizaciones de la conexión
   async handleConnectionUpdate(update) {
-    const { connection, lastDisconnect } = update;
+    const { connection, lastDisconnect } = update; // Extraemos los detalles de la actualización
 
     if (connection === "close") {
+      // Si la conexión se cerró, intentamos reconectar según el motivo del cierre
       console.log("Connection closed:", lastDisconnect?.error);
       const shouldReconnect =
         lastDisconnect?.error instanceof Boom &&
@@ -155,25 +160,26 @@ class WhatsAppClient {
 
       if (shouldReconnect) {
         console.log("Attempting to reconnect...");
-        this.start();
+        this.start(); // Intentamos reconectar
       } else {
         console.log(
           "You are logged out or there is a conflict. Resolve the issue and restart the server."
         );
       }
     } else if (connection === "open") {
-      console.log("Connection opened.");
+      console.log("Connection opened."); // La conexión se abrió correctamente
     }
   }
 
   // Método para enviar un mensaje
   async sendMessage(conversationId, message) {
-    const formattedNumber = this.formatWhatsAppNumber(conversationId);
-    const maxRetries = 3;
-    let retryCount = 0;
+    const formattedNumber = this.formatWhatsAppNumber(conversationId); // Formateamos el número
+    const maxRetries = 3; // Máximo de intentos de reenvío
+    let retryCount = 0; // Contador de intentos
 
     const trySendMessage = async () => {
       try {
+        // Actualizamos el estado de presencia y enviamos el mensaje
         await this.sock.sendPresenceUpdate("composing", formattedNumber);
 
         const result = await this.sock.sendMessage(formattedNumber, {
@@ -188,47 +194,50 @@ class WhatsAppClient {
         if (retryCount < maxRetries) {
           retryCount++;
           console.log(`Reintentando envío (${retryCount}/${maxRetries})...`);
-          await new Promise((resolve) => setTimeout(resolve, 2000)); // Esperar 2 segundos
-          return trySendMessage();
+          await new Promise((resolve) => setTimeout(resolve, 2000)); // Esperamos 2 segundos antes de reintentar
+          return trySendMessage(); // Reintentamos enviar el mensaje
         }
-        throw error;
+        throw error; // Si superamos el máximo de intentos, lanzamos el error
       }
     };
 
-    return trySendMessage();
+    return trySendMessage(); // Intentamos enviar el mensaje
   }
 
+  // Método para verificar si hay un agente activo en la conversación
   hasActiveAgent(conversationId) {
-    const formattedNumber = this.formatWhatsAppNumber(conversationId);
-    return Boolean(this.activeConversations[formattedNumber]);
+    const formattedNumber = this.formatWhatsAppNumber(conversationId); // Formateamos el número
+    return Boolean(this.activeConversations[formattedNumber]); // Devolvemos true si hay un agente asignado
   }
 
+  // Método para asignar un agente a una conversación
   assignAgent(conversationId, agentId) {
-    const formattedNumber = this.formatWhatsAppNumber(conversationId);
-    // Verificar si ya hay un agente asignado
+    const formattedNumber = this.formatWhatsAppNumber(conversationId); // Formateamos el número
     if (this.activeConversations[formattedNumber]) {
+      // Verificamos si ya hay un agente asignado
       console.log(
         `Conversación ${formattedNumber} ya tiene un agente asignado`
       );
-      return false;
+      return false; // No asignamos el agente si ya hay uno
     }
-    this.activeConversations[formattedNumber] = agentId;
+    this.activeConversations[formattedNumber] = agentId; // Asignamos el agente a la conversación
     console.log(`Agente ${agentId} asignado a conversación ${formattedNumber}`);
-    return true;
+    return true; // Devolvemos true para indicar que el agente fue asignado
   }
 
   // Método para cerrar una conversación
   closeConversation(conversationId) {
-    const formattedNumber = this.formatWhatsAppNumber(conversationId);
-    delete this.activeConversations[formattedNumber];
+    const formattedNumber = this.formatWhatsAppNumber(conversationId); // Formateamos el número
+    delete this.activeConversations[formattedNumber]; // Eliminamos la conversación de las activas
   }
 
-  // Método para obtener el historial de mensajes
+  // Método para obtener el historial de mensajes de una conversación
   async getMessageHistory(conversationId) {
-    const formattedNumber = this.formatWhatsAppNumber(conversationId);
+    const formattedNumber = this.formatWhatsAppNumber(conversationId); // Formateamos el número
     try {
-      const messages = await this.store.loadMessages(formattedNumber, 50);
+      const messages = await this.store.loadMessages(formattedNumber, 50); // Cargamos los últimos 50 mensajes
 
+      // Marcamos el último mensaje como leído y actualizamos el estado de presencia
       await this.sock.readMessages([
         {
           remoteJid: formattedNumber,
@@ -239,35 +248,36 @@ class WhatsAppClient {
 
       await this.sock.sendPresenceUpdate("available", formattedNumber);
 
-      return this.formatMessages(messages || []);
+      return this.formatMessages(messages || []); // Formateamos y devolvemos los mensajes
     } catch (error) {
       console.error("Error al obtener historial de mensajes:", error);
-      return [];
+      return []; // Devolvemos un arreglo vacío en caso de error
     }
   }
 
   // Método auxiliar para formatear mensajes
   formatMessages(messages) {
     return messages.map((msg) => ({
-      id: msg.key.id || Date.now().toString(),
-      sender: msg.key.fromMe ? "bot" : "user",
-      timestamp: msg.messageTimestamp || Math.floor(Date.now() / 1000),
-      content: this.extractMessageContent(msg),
+      id: msg.key.id || Date.now().toString(), // Usamos el ID del mensaje o generamos uno
+      sender: msg.key.fromMe ? "bot" : "user", // Determinamos el remitente
+      timestamp: msg.messageTimestamp || Math.floor(Date.now() / 1000), // Usamos el timestamp del mensaje o generamos uno
+      content: this.extractMessageContent(msg), // Extraemos el contenido del mensaje
     }));
   }
 
   // Método auxiliar para extraer el contenido del mensaje
   extractMessageContent(msg) {
-    if (!msg.message) return "Mensaje no disponible";
+    if (!msg.message) return "Mensaje no disponible"; // Si no hay mensaje, devolvemos un mensaje predeterminado
 
+    // Intentamos extraer el contenido del mensaje de varias formas
     return (
       msg.message.conversation ||
       msg.message.extendedTextMessage?.text ||
       msg.message.buttonsResponseMessage?.selectedDisplayText ||
       msg.message.templateButtonReplyMessage?.selectedDisplayText ||
-      "Contenido no soportado"
+      "Contenido no soportado" // Si no podemos extraer el contenido, devolvemos un mensaje predeterminado
     );
   }
 }
 
-module.exports = WhatsAppClient;
+module.exports = WhatsAppClient; // Exportamos la clase para su uso en otros archivos
