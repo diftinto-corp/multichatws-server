@@ -4,6 +4,7 @@ class SocketHandler {
   constructor(io, whatsAppClient) {
     this.io = io;
     this.whatsAppClient = whatsAppClient;
+    this.processingConversations = new Set(); // Para controlar conversaciones en proceso
   }
 
   initialize() {
@@ -12,8 +13,26 @@ class SocketHandler {
 
       // Manejar cuando un agente toma una conversación
       socket.on("take_conversation", async ({ conversationId }) => {
-        console.log(`Agent ${socket.id} taking conversation ${conversationId}`);
-        await this.handleTakeConversation(socket, conversationId);
+        // Verificar si la conversación ya está siendo procesada
+        if (this.processingConversations.has(conversationId)) {
+          console.log(
+            `Conversación ${conversationId} ya está siendo procesada`
+          );
+          return;
+        }
+
+        // Marcar la conversación como en proceso
+        this.processingConversations.add(conversationId);
+
+        try {
+          console.log(
+            `Agent ${socket.id} taking conversation ${conversationId}`
+          );
+          await this.handleTakeConversation(socket, conversationId);
+        } finally {
+          // Remover la conversación del conjunto de procesamiento
+          this.processingConversations.delete(conversationId);
+        }
       });
 
       // Cambiar "send_message" a "agent_message" para coincidir con el cliente
@@ -54,6 +73,17 @@ class SocketHandler {
 
   async handleTakeConversation(socket, conversationId) {
     try {
+      // Verificar si la conversación ya tiene un agente asignado
+      if (this.whatsAppClient.hasActiveAgent(conversationId)) {
+        console.log(
+          `Conversación ${conversationId} ya tiene un agente asignado`
+        );
+        return;
+      }
+
+      // Unir al socket a una sala específica para esta conversación
+      socket.join(conversationId);
+
       // Asignar el agente a la conversación
       this.whatsAppClient.assignAgent(conversationId, socket.id);
 
@@ -69,20 +99,23 @@ class SocketHandler {
       });
 
       // Notificar que la conversación fue tomada
-      this.io.emit("conversation_taken", {
+      socket.broadcast.emit("conversation_taken", {
         conversationId,
         agentId: socket.id,
       });
 
-      // Mensaje automático al usuario
+      // Enviar mensaje al usuario
       await this.whatsAppClient.sendMessage(
         conversationId,
-        "Ya notifique a un agente para que pueda ayudarte. Hasta luego."
+        "Le he informado a un agente humano, dentro de poco te escribirá, hasta luego"
       );
+
+      console.log(`Conversación ${conversationId} iniciada exitosamente`);
     } catch (error) {
-      console.error("Error handling take conversation:", error);
+      console.error("Error al manejar toma de conversación:", error);
       socket.emit("error", {
         message: "Error al procesar la solicitud",
+        details: error.message,
       });
     }
   }

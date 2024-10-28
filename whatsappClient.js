@@ -198,10 +198,23 @@ class WhatsAppClient {
     return trySendMessage();
   }
 
-  // Método para asignar un agente a una conversación
+  hasActiveAgent(conversationId) {
+    const formattedNumber = this.formatWhatsAppNumber(conversationId);
+    return Boolean(this.activeConversations[formattedNumber]);
+  }
+
   assignAgent(conversationId, agentId) {
     const formattedNumber = this.formatWhatsAppNumber(conversationId);
+    // Verificar si ya hay un agente asignado
+    if (this.activeConversations[formattedNumber]) {
+      console.log(
+        `Conversación ${formattedNumber} ya tiene un agente asignado`
+      );
+      return false;
+    }
     this.activeConversations[formattedNumber] = agentId;
+    console.log(`Agente ${agentId} asignado a conversación ${formattedNumber}`);
+    return true;
   }
 
   // Método para cerrar una conversación
