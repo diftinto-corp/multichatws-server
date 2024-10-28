@@ -103,47 +103,50 @@ class SocketHandler {
   // Método para manejar la toma de una conversación por un agente
   async handleTakeConversation(socket, conversationId) {
     try {
-      // Verificar si la conversación ya tiene un agente asignado
+      console.log(`Iniciando toma de conversación para ${conversationId}`);
+
       if (this.whatsAppClient.hasActiveAgent(conversationId)) {
         console.log(
           `Conversación ${conversationId} ya tiene un agente asignado`
         );
-        return; // Si ya hay un agente, no hacer nada
+        return;
       }
 
-      // Unir al socket a una sala específica para esta conversación
       socket.join(conversationId);
-
-      // Asignar el agente a la conversación
       this.whatsAppClient.assignAgent(conversationId, socket.id);
 
-      // Obtener el historial de mensajes de la conversación
+      // Obtener historial
+      console.log("Solicitando historial de mensajes...");
       const messageHistory = await this.whatsAppClient.getMessageHistory(
         conversationId
       );
+      console.log(`Historial obtenido: ${messageHistory.length} mensajes`);
 
-      // Enviar el historial de mensajes al agente
-      socket.emit("conversation-history", {
+      if (messageHistory.length > 0) {
+        console.log("Enviando historial al agente:", messageHistory);
+      }
+
+      // Cambiar el nombre del evento para que coincida
+      socket.emit("conversation_history", {
         conversationId,
         messages: messageHistory,
       });
 
-      // Notificar a otros agentes que la conversación fue tomada
+      // Notificar que la conversación fue tomada
       socket.broadcast.emit("conversation_taken", {
         conversationId,
         agentId: socket.id,
       });
 
-      // Enviar mensaje al usuario indicando que un agente humano se unirá pronto
+      // Mensaje al usuario
       await this.whatsAppClient.sendMessage(
         conversationId,
-        "Le he informado a un agente humano, dentro de poco te escribirá, hasta luego👋"
+        "Le he informado a un agente humano, dentro de poco te escribirá, hasta luego"
       );
 
       console.log(`Conversación ${conversationId} iniciada exitosamente`);
     } catch (error) {
       console.error("Error al manejar toma de conversación:", error);
-      // Notificar al agente sobre el error
       socket.emit("error", {
         message: "Error al procesar la solicitud",
         details: error.message,

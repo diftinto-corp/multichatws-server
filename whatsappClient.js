@@ -27,7 +27,15 @@ class WhatsAppClient {
     this.io = io; // Socket.io para comunicación en tiempo real con el frontend
     this.sock = null; // Inicializamos el socket de WhatsApp como nulo
     this.activeConversations = {}; // Objeto para almacenar las conversaciones activas
-    this.store = makeInMemoryStore({}); // Almacenamiento en memoria para mensajes y sesiones
+
+    // Configurar el store
+    this.store = makeInMemoryStore({});
+    this.store.readFromFile("./baileys_store.json");
+
+    // Guardar el store cada 10000 ms
+    setInterval(() => {
+      this.store.writeToFile("./baileys_store.json");
+    }, 10000);
   }
 
   // Método para formatear números de teléfono al formato requerido por WhatsApp
@@ -60,6 +68,9 @@ class WhatsAppClient {
       keepAliveIntervalMs: 25000,
       retryRequestDelayMs: 5000,
     });
+
+    // Bind el store al socket
+    this.store.bind(this.sock.ev);
 
     // Procesamos los eventos emitidos por el socket de WhatsApp
     this.sock.ev.process(async (events) => {
@@ -145,7 +156,6 @@ class WhatsAppClient {
       }
     }
   }
-
   // Método para manejar actualizaciones de la conexión
   async handleConnectionUpdate(update) {
     const { connection, lastDisconnect } = update; // Extraemos los detalles de la actualización
@@ -234,25 +244,44 @@ class WhatsAppClient {
 
   // Método para obtener el historial de mensajes de una conversación
   async getMessageHistory(conversationId) {
-    const formattedNumber = this.formatWhatsAppNumber(conversationId); // Formateamos el número
+    const formattedNumber = this.formatWhatsAppNumber(conversationId);
     try {
-      const messages = await this.store.loadMessages(formattedNumber, 50); // Cargamos los últimos 50 mensajes
+      console.log(`Obteniendo historial para ${formattedNumber}`);
 
-      // Marcamos el último mensaje como leído y actualizamos el estado de presencia
-      await this.sock.readMessages([
-        {
-          remoteJid: formattedNumber,
-          id: messages[messages.length - 1]?.key?.id,
-          participant: undefined,
-        },
-      ]);
+      // Obtener los últimos mensajes
+      const messages = await this.store.loadMessages(formattedNumber, 100);
+      console.log("Mensajes cargados del store:", messages?.length || 0);
 
-      await this.sock.sendPresenceUpdate("available", formattedNumber);
+      if (messages && messages.length > 0) {
+        await this.sock.readMessages([
+          {
+            remoteJid: formattedNumber,
+            id: messages[messages.length - 1]?.key?.id,
+            participant: undefined,
+          },
+        ]);
+      }
 
-      return this.formatMessages(messages || []); // Formateamos y devolvemos los mensajes
+      // Formatear los mensajes
+      const formattedMessages =
+        messages?.map((msg) => {
+          const content = this.extractMessageContent(msg);
+          const fromMe = msg.key.fromMe;
+          const messageInfo = {
+            id: msg.key.id || Date.now().toString(),
+            sender: fromMe ? "ai" : "user",
+            timestamp: msg.messageTimestamp || Math.floor(Date.now() / 1000),
+            content: content,
+          };
+          console.log("Mensaje formateado:", messageInfo);
+          return messageInfo;
+        }) || [];
+
+      console.log(`Total de mensajes formateados: ${formattedMessages.length}`);
+      return formattedMessages;
     } catch (error) {
       console.error("Error al obtener historial de mensajes:", error);
-      return []; // Devolvemos un arreglo vacío en caso de error
+      return [];
     }
   }
 
@@ -268,16 +297,25 @@ class WhatsAppClient {
 
   // Método auxiliar para extraer el contenido del mensaje
   extractMessageContent(msg) {
-    if (!msg.message) return "Mensaje no disponible"; // Si no hay mensaje, devolvemos un mensaje predeterminado
+    if (!msg.message) {
+      console.log("Mensaje sin contenido");
+      return "Mensaje no disponible";
+    }
 
-    // Intentamos extraer el contenido del mensaje de varias formas
-    return (
+    // Extraer el contenido del mensaje
+    const content =
       msg.message.conversation ||
       msg.message.extendedTextMessage?.text ||
       msg.message.buttonsResponseMessage?.selectedDisplayText ||
-      msg.message.templateButtonReplyMessage?.selectedDisplayText ||
-      "Contenido no soportado" // Si no podemos extraer el contenido, devolvemos un mensaje predeterminado
-    );
+      msg.message.templateButtonReplyMessage?.selectedDisplayText;
+
+    if (!content) {
+      console.log("Tipo de mensaje no soportado:", Object.keys(msg.message));
+      return "Contenido no soportado";
+    }
+
+    console.log("Contenido extraído:", content);
+    return content;
   }
 }
 
