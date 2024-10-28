@@ -77,6 +77,26 @@ class SocketHandler {
       socket.on("disconnect", () => {
         console.log("Agent disconnected:", socket.id);
       });
+
+      // Agregar manejador para el estado de escritura
+      socket.on("agent_typing_status", async (data) => {
+        const { conversationId, isTyping } = data;
+        try {
+          if (isTyping) {
+            await this.whatsAppClient.sock.sendPresenceUpdate(
+              "composing",
+              conversationId
+            );
+          } else {
+            await this.whatsAppClient.sock.sendPresenceUpdate(
+              "available",
+              conversationId
+            );
+          }
+        } catch (error) {
+          console.error("Error al actualizar estado de escritura:", error);
+        }
+      });
     });
   }
 

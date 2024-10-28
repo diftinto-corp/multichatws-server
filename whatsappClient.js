@@ -98,22 +98,22 @@ class WhatsAppClient {
 
   // Método para procesar mensajes recibidos
   async processMessage(conversationId, text) {
-    const formattedNumber = this.formatWhatsAppNumber(conversationId); // Formateamos el número
-    const agentId = this.activeConversations[formattedNumber]; // Obtenemos el ID del agente asignado a la conversación
+    const formattedNumber = this.formatWhatsAppNumber(conversationId);
+    const agentId = this.activeConversations[formattedNumber];
     console.log(
       `Procesando mensaje para ${formattedNumber}, agentId: ${agentId}`
     );
 
     if (agentId) {
-      // Si hay un agente asignado, reenviamos el mensaje al agente
       console.log(`Reenviando mensaje al agente ${agentId}`);
+
       this.io.to(agentId).emit("user_message", {
         conversationId: formattedNumber,
-        message: text, // Enviamos solo el texto del mensaje
+        message: text,
       });
 
       try {
-        // Marcamos el mensaje como leído y actualizamos el estado de presencia
+        // Solo marcar como leído, sin cambiar el estado de presencia
         await this.sock.readMessages([
           {
             remoteJid: formattedNumber,
@@ -121,7 +121,8 @@ class WhatsAppClient {
           },
         ]);
 
-        await this.sock.sendPresenceUpdate("composing", formattedNumber);
+        // Removemos esta línea que actualizaba la presencia
+        // await this.sock.sendPresenceUpdate("composing", formattedNumber);
 
         console.log(`Mensaje reenviado exitosamente al agente ${agentId}`);
       } catch (error) {
@@ -173,20 +174,20 @@ class WhatsAppClient {
 
   // Método para enviar un mensaje
   async sendMessage(conversationId, message) {
-    const formattedNumber = this.formatWhatsAppNumber(conversationId); // Formateamos el número
-    const maxRetries = 3; // Máximo de intentos de reenvío
-    let retryCount = 0; // Contador de intentos
+    const formattedNumber = this.formatWhatsAppNumber(conversationId);
+    const maxRetries = 3;
+    let retryCount = 0;
 
     const trySendMessage = async () => {
       try {
-        // Actualizamos el estado de presencia y enviamos el mensaje
-        await this.sock.sendPresenceUpdate("composing", formattedNumber);
-
+        // Ya no enviamos el estado "composing" aquí
         const result = await this.sock.sendMessage(formattedNumber, {
           text: message,
         });
 
+        // Establecer como disponible después de enviar
         await this.sock.sendPresenceUpdate("available", formattedNumber);
+
         console.log(`Mensaje enviado a ${formattedNumber} exitosamente`);
         return result;
       } catch (error) {
@@ -194,14 +195,14 @@ class WhatsAppClient {
         if (retryCount < maxRetries) {
           retryCount++;
           console.log(`Reintentando envío (${retryCount}/${maxRetries})...`);
-          await new Promise((resolve) => setTimeout(resolve, 2000)); // Esperamos 2 segundos antes de reintentar
-          return trySendMessage(); // Reintentamos enviar el mensaje
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          return trySendMessage();
         }
-        throw error; // Si superamos el máximo de intentos, lanzamos el error
+        throw error;
       }
     };
 
-    return trySendMessage(); // Intentamos enviar el mensaje
+    return trySendMessage();
   }
 
   // Método para verificar si hay un agente activo en la conversación
